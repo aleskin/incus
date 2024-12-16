@@ -1,15 +1,17 @@
 package drivers
 
 import (
-	"io"
+	"fmt"
+	"path/filepath"
+	"strings"
 
-	"github.com/lxc/incus/v6/internal/instancewriter"
-	"github.com/lxc/incus/v6/internal/server/backup"
+	"golang.org/x/sys/unix"
+
 	deviceConfig "github.com/lxc/incus/v6/internal/server/device/config"
-	"github.com/lxc/incus/v6/internal/server/migration"
 	"github.com/lxc/incus/v6/internal/server/operations"
+	internalUtil "github.com/lxc/incus/v6/internal/util"
 	"github.com/lxc/incus/v6/shared/api"
-	"github.com/lxc/incus/v6/shared/revert"
+	"github.com/lxc/incus/v6/shared/util"
 )
 
 type ploop struct {
@@ -18,6 +20,15 @@ type ploop struct {
 
 // load is used to run one-time action per-driver rather than per-pool.
 func (d *ploop) load() error {
+	// Register the patches.
+	d.patches = map[string]func() error{
+		"storage_lvm_skipactivation":                         nil,
+		"storage_missing_snapshot_records":                   nil,
+		"storage_delete_old_snapshot_records":                nil,
+		"storage_zfs_drop_block_volume_filesystem_extension": nil,
+		"storage_prefix_bucket_names_with_project":           nil,
+	}
+
 	return nil
 }
 
@@ -30,23 +41,73 @@ func (d *ploop) Info() Info {
 		OptimizedImages:              false,
 		PreservesInodes:              false,
 		Remote:                       d.isRemote(),
-		VolumeTypes:                  []VolumeType{VolumeTypeCustom, VolumeTypeImage, VolumeTypeContainer, VolumeTypeVM},
+		VolumeTypes:                  []VolumeType{VolumeTypeBucket, VolumeTypeCustom, VolumeTypeImage, VolumeTypeContainer, VolumeTypeVM},
+		VolumeMultiNode:              d.isRemote(),
 		BlockBacking:                 false,
 		RunningCopyFreeze:            true,
 		DirectIO:                     true,
+		IOUring:                      true,
 		MountedRoot:                  true,
+		Buckets:                      true,
 	}
 }
 
+// FillConfig populates the storage pool's configuration file with the default values.
 func (d *ploop) FillConfig() error {
+	// Set default source if missing.
+	if d.config["source"] == "" {
+		d.config["source"] = GetPoolMountPath(d.name)
+	}
+
 	return nil
 }
 
+// Create is called during pool creation and is effectively using an empty driver struct.
+// WARNING: The Create() function cannot rely on any of the struct attributes being set.
 func (d *ploop) Create() error {
+	err := d.FillConfig()
+	if err != nil {
+		return err
+	}
+
+	sourcePath := d.config["source"]
+
+	if !util.PathExists(sourcePath) {
+		return fmt.Errorf("Source path '%s' doesn't exist", sourcePath)
+	}
+
+	// Check that if within INCUS_DIR, we're at our expected spot.
+	cleanSource := filepath.Clean(sourcePath)
+	varPath := strings.TrimRight(internalUtil.VarPath(), "/") + "/"
+	if (cleanSource == internalUtil.VarPath() || strings.HasPrefix(cleanSource, varPath)) && cleanSource != GetPoolMountPath(d.name) {
+		return fmt.Errorf("Source path '%s' is within the Incus directory", cleanSource)
+	}
+
+	// Check that the path is currently empty.
+	isEmpty, err := internalUtil.PathIsEmpty(sourcePath)
+	if err != nil {
+		return err
+	}
+
+	if !isEmpty {
+		return fmt.Errorf("Source path '%s' isn't empty", sourcePath)
+	}
 	return nil
 }
 
+// Delete removes the storage pool from the storage device.
 func (d *ploop) Delete(op *operations.Operation) error {
+	// On delete, wipe everything in the directory.
+	err := wipeDirectory(GetPoolMountPath(d.name))
+	if err != nil {
+		return err
+	}
+
+	// Unmount the path.
+	_, err = d.Unmount()
+	if err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -62,156 +123,42 @@ func (d *ploop) Update(changedConfig map[string]string) error {
 
 // Mount mounts the storage pool.
 func (d *ploop) Mount() (bool, error) {
+	path := GetPoolMountPath(d.name)
+	sourcePath := d.config["source"]
+
+	// Check if we're dealing with an external mount.
+	if sourcePath == path {
+		return false, nil
+	}
+
+	// Check if already mounted.
+	if sameMount(sourcePath, path) {
+		return false, nil
+	}
+
+	// Setup the bind-mount.
+	err := TryMount(sourcePath, path, "none", unix.MS_BIND, "")
+	if err != nil {
+		return false, err
+	}
+
 	return true, nil
 }
 
 // Unmount unmounts the storage pool.
 func (d *ploop) Unmount() (bool, error) {
-	return true, nil
+	path := GetPoolMountPath(d.name)
+
+	// Check if we're dealing with an external mount.
+	if d.config["source"] == path {
+		return false, nil
+	}
+
+	// Unmount until nothing is left mounted.
+	return forceUnmount(path)
 }
 
 // GetResources returns the pool resource usage information.
 func (d *ploop) GetResources() (*api.ResourcesStoragePool, error) {
-	return nil, nil
-}
-
-// CreateVolume creates an empty volume and can optionally fill it by executing the supplied filler function.
-func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Operation) error {
-	return nil
-}
-
-// CreateVolumeFromBackup restores a backup tarball onto the storage device.
-func (d *ploop) CreateVolumeFromBackup(vol Volume, srcBackup backup.Info, srcData io.ReadSeeker, op *operations.Operation) (VolumePostHook, revert.Hook, error) {
-	return nil, nil, nil
-}
-
-// CreateVolumeFromCopy provides same-pool volume copying functionality.
-func (d *ploop) CreateVolumeFromCopy(vol Volume, srcVol Volume, copySnapshots bool, allowInconsistent bool, op *operations.Operation) error {
-	return nil
-}
-
-// CreateVolumeFromMigration creates a volume being sent via a migration.
-func (d *ploop) CreateVolumeFromMigration(vol Volume, conn io.ReadWriteCloser, volTargetArgs migration.VolumeTargetArgs, preFiller *VolumeFiller, op *operations.Operation) error {
-	return nil
-}
-
-// RefreshVolume provides same-pool volume and specific snapshots syncing functionality.
-func (d *ploop) RefreshVolume(vol Volume, srcVol Volume, srcSnapshots []Volume, allowInconsistent bool, op *operations.Operation) error {
-	return nil
-}
-
-// DeleteVolume deletes a volume of the storage device. If any snapshots of the volume remain then this function
-// will return an error.
-func (d *ploop) DeleteVolume(vol Volume, op *operations.Operation) error {
-	return nil
-}
-
-// HasVolume indicates whether a specific volume exists on the storage pool.
-func (d *ploop) HasVolume(vol Volume) (bool, error) {
-	return true, nil
-}
-
-// ValidateVolume validates the supplied volume config. Optionally removes invalid keys from the volume's config.
-func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
-	return nil
-}
-
-// UpdateVolume applies config changes to the volume.
-func (d *ploop) UpdateVolume(vol Volume, changedConfig map[string]string) error {
-	if vol.contentType != ContentTypeFS {
-		return ErrNotSupported
-	}
-
-	_, changed := changedConfig["size"]
-	if changed {
-		err := d.SetVolumeQuota(vol, changedConfig["size"], false, nil)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// GetVolumeUsage returns the disk space used by the volume.
-func (d *ploop) GetVolumeUsage(vol Volume) (int64, error) {
-	return 0, nil
-}
-
-// SetVolumeQuota applies a size limit on volume.
-func (d *ploop) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, op *operations.Operation) error {
-	return nil
-}
-
-// GetVolumeDiskPath returns the location of a disk volume.
-func (d *ploop) GetVolumeDiskPath(vol Volume) (string, error) {
-	return "", nil
-}
-
-// ListVolumes returns a list of volumes in storage pool.
-func (d *ploop) ListVolumes() ([]Volume, error) {
-	return nil, nil
-}
-
-// MountVolume simulates mounting a volume.
-func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
-	return nil
-}
-
-// UnmountVolume simulates unmounting a volume. As dir driver doesn't have volumes to unmount it
-// returns false indicating the volume was already unmounted.
-func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operation) (bool, error) {
-	return false, nil
-}
-
-// RenameVolume renames a volume and its snapshots.
-func (d *ploop) RenameVolume(vol Volume, newVolName string, op *operations.Operation) error {
-	return nil
-}
-
-// MigrateVolume sends a volume for migration.
-func (d *ploop) MigrateVolume(vol Volume, conn io.ReadWriteCloser, volSrcArgs *migration.VolumeSourceArgs, op *operations.Operation) error {
-	return nil
-}
-
-// BackupVolume copies a volume (and optionally its snapshots) to a specified target path.
-// This driver does not support optimized backups.
-func (d *ploop) BackupVolume(vol Volume, tarWriter *instancewriter.InstanceTarWriter, optimized bool, snapshots []string, op *operations.Operation) error {
-	return nil
-}
-
-// CreateVolumeSnapshot creates a snapshot of a volume.
-func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	return nil
-}
-
-// DeleteVolumeSnapshot removes a snapshot from the storage device. The volName and snapshotName
-// must be bare names and should not be in the format "volume/snapshot".
-func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	return nil
-}
-
-// MountVolumeSnapshot sets up a read-only mount on top of the snapshot to avoid accidental modifications.
-func (d *ploop) MountVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	return nil
-}
-
-// UnmountVolumeSnapshot removes the read-only mount placed on top of a snapshot.
-func (d *ploop) UnmountVolumeSnapshot(snapVol Volume, op *operations.Operation) (bool, error) {
-	return true, nil
-}
-
-// VolumeSnapshots returns a list of snapshots for the volume (in no particular order).
-func (d *ploop) VolumeSnapshots(vol Volume, op *operations.Operation) ([]string, error) {
-	return nil, nil
-}
-
-// RestoreVolume restores a volume from a snapshot.
-func (d *ploop) RestoreVolume(vol Volume, snapshotName string, op *operations.Operation) error {
-	return nil
-}
-
-// RenameVolumeSnapshot renames a volume snapshot.
-func (d *ploop) RenameVolumeSnapshot(snapVol Volume, newSnapshotName string, op *operations.Operation) error {
-	return nil
+	return genericVFSGetResources(d)
 }
