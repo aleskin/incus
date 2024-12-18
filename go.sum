@@ -1,3 +1,7 @@
+bitbucket.org/aleskinprivate/vzgoploop v0.0.2 h1:HVGwVMIFt7z1jfjgD9CYi1LAu8/NTCaZautqw3tvvLc=
+bitbucket.org/aleskinprivate/vzgoploop v0.0.2/go.mod h1:CyvBxcPR5/+03zOmFe7lbFIyqxFre1Mt6ZxB/OGzPNM=
+bitbucket.org/aleskinprivate/vzgoploop v0.0.3 h1:RGzMXDxy8S/KqnWihhKkemVpFg24fX41zqdJyuD9GK8=
+bitbucket.org/aleskinprivate/vzgoploop v0.0.3/go.mod h1:CyvBxcPR5/+03zOmFe7lbFIyqxFre1Mt6ZxB/OGzPNM=
 cloud.google.com/go v0.26.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.34.0/go.mod h1:aQUYkXzVsufM+DwF1aE+0xfcU+56JwCaLick0ClmMTw=
 cloud.google.com/go v0.38.0/go.mod h1:990N+gfupTy94rShfmMCWGDn0LpTmnzTp2qbd1dvSRU=
