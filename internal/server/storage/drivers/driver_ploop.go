@@ -7,6 +7,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
+	"bitbucket.org/aleskinprivate/vzgoploop"
 	deviceConfig "github.com/lxc/incus/v6/internal/server/device/config"
 	"github.com/lxc/incus/v6/internal/server/operations"
 	internalUtil "github.com/lxc/incus/v6/internal/util"
@@ -76,6 +77,8 @@ func (d *ploop) Create() error {
 		return fmt.Errorf("Source path '%s' doesn't exist", sourcePath)
 	}
 
+	fmt.Printf("AILDBG: - Create ploop storage! [%s]\n", vzgoploop.About())
+
 	// Check that if within INCUS_DIR, we're at our expected spot.
 	cleanSource := filepath.Clean(sourcePath)
 	varPath := strings.TrimRight(internalUtil.VarPath(), "/") + "/"
@@ -92,6 +95,7 @@ func (d *ploop) Create() error {
 	if !isEmpty {
 		return fmt.Errorf("Source path '%s' isn't empty", sourcePath)
 	}
+	fmt.Printf("AILDBG: - Created ploop storage!\n")
 	return nil
 }
 

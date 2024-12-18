@@ -300,18 +300,23 @@ func (d *common) moveGPTAltHeader(devPath string) error {
 
 // runFiller runs the supplied filler, and setting the returned volume size back into filler.
 func (d *common) runFiller(vol Volume, devPath string, filler *VolumeFiller, allowUnsafeResize bool) error {
+
+	fmt.Printf("AILDBG: Filler\n")
+
 	if filler == nil || filler.Fill == nil {
 		return nil
 	}
 
+	fmt.Printf("AILDBG: Filler\n")
 	vol.driver.Logger().Debug("Running filler function", logger.Ctx{"dev": devPath, "path": vol.MountPath()})
 	volSize, err := filler.Fill(vol, devPath, allowUnsafeResize)
+	fmt.Printf("AILDBG: Filler volSize = %d\n", volSize)
 	if err != nil {
 		return err
 	}
 
 	filler.Size = volSize
-
+	fmt.Printf("AILDBG: Filler exit volSize = %d\n", volSize)
 	return nil
 }
 
