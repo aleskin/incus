@@ -21,22 +21,24 @@ import (
 )
 
 // TODO take values from vzgoploop
+const defaultPloopSize = 4 * 512 * 1024
 const defaultFileName = "root.hds"
 const defaultDescriptor = "DiskDescriptor.xml"
 const MaxTraceDepth = 5
 
-func PrintTrace(info string, depth int) {
+func (d *ploop) PrintTrace(info string, depth int) {
 
 	if depth > MaxTraceDepth {
 		depth = MaxTraceDepth
 	}
+
 	if info != "" && depth > 1 {
-		fmt.Printf("AILDBG: Trace depth = %d; %s ------------------------------------------------\n", depth, info)
+		d.logger.Debug("VZ Ploop: Trace:", logger.Ctx{"info": info, "depth": depth})
 	}
 
 	for i := 0; i < depth; i++ {
 		pc, _, _, _ := runtime.Caller(depth - i)
-		fmt.Printf("AILDBG: Trace %d: [%s];\n", depth-i, runtime.FuncForPC(pc).Name())
+		d.logger.Debug("VZ Ploop: Trace:", logger.Ctx{"frame": depth - i, "func": runtime.FuncForPC(pc).Name()})
 	}
 }
 
@@ -44,14 +46,15 @@ func PrintTrace(info string, depth int) {
 // filler function.
 func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Operation) error {
 
+	d.PrintTrace("", 1)
 	volPath := vol.MountPath()
-	fmt.Printf("AILDBG: - Create Volume in the ploop storage! MountPath ='%s'; Name= '%s'; Type = '%s'!\n", volPath, vol.name, vol.volType)
+	d.logger.Debug("VZ Ploop: Create Volume", logger.Ctx{"MountPath": volPath, "Name": vol.name, "Type": vol.volType})
 
 	revert := revert.New()
 	defer revert.Fail()
 
 	if util.PathExists(vol.MountPath()) {
-		return fmt.Errorf("Volume path %q already exists", vol.MountPath())
+		return fmt.Errorf("VZ Ploop: Volume path %q already exists", vol.MountPath())
 	}
 
 	// Create the volume itself.
@@ -59,21 +62,18 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 	if err != nil {
 		return err
 	}
-	fmt.Printf("AILDBG: [Create Volume] ensure mount Path\n")
-
 	revert.Add(func() { _ = os.RemoveAll(volPath) })
 
 	// Get path to disk volume if volume is block or iso.
 	rootBlockPath := ""
-	fmt.Printf("AILDBG: [Create Volume] vol.contentType = %s\n", vol.contentType)
 	if IsContentBlock(vol.contentType) {
-		fmt.Printf("AILDBG: [Create Volume] ! is Block\n")
 		// We expect the filler to copy the VM image into this path.
 		rootBlockPath, err = d.GetVolumeDiskPath(vol)
 		if err != nil {
 			return err
 		}
 	}
+
 	// else if vol.volType != VolumeTypeBucket {
 	// 	// Filesystem quotas only used with non-block volume types.
 	// 	revertFunc, err := d.setupInitialQuota(vol)
@@ -86,37 +86,32 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 	// 	}
 	// }
 
-	fmt.Printf("AILDBG: [Create Volume] rootBlockPath = %s\n", rootBlockPath)
-
 	//create ploop device
 	param := vzgoploop.VZP_CreateParam{
-		Size:  4 * 512 * 1024,
+		Size:  defaultPloopSize,
 		Image: volPath + "/" + defaultFileName,
 	}
 
 	res := vzgoploop.Create(&param)
 
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		fmt.Printf("Can't create disk: %s \n", res.Msg)
+		return fmt.Errorf("VZ Ploop: Can't create disk: %s \n", res.Msg)
 	}
-	// if res.status != vzgoploop.VZP_SUCCESS {
-	// 	fmt.Printf("Can't create disk: %s \n", res.msg)
-	// }
 
 	disk, res := vzgoploop.Open(volPath + "/" + defaultDescriptor)
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("AILDBG: Can't open disk: %s \n", res.Msg)
+		return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
 	}
 
-	mp := vzgoploop.VZP_MountParam{Target: vol.MountPath() + "/rootfs"}
+	mp := vzgoploop.VZP_MountParam{Target: volPath + "/rootfs"}
 
 	_ = os.Mkdir(mp.Target, 0755) //TODO
 	device, res := disk.MountImage(&mp)
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("AILDBG: Can't mount image create: %s \n", res.Msg)
+		return fmt.Errorf("VZ Ploop: Can't mount image create: %s \n", res.Msg)
 	}
 
-	fmt.Printf("AILDBG: mounted [%s]\n", device)
+	d.logger.Info("VZ Ploop: Mounted", logger.Ctx{"device": device})
 
 	// Run the volume filler function if supplied.
 	err = d.runFiller(vol, rootBlockPath, filler, false)
@@ -124,14 +119,15 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 		return err
 	}
 
-	// res = disk.UmountImage()
-	// if res.Status != vzgoploop.VZP_SUCCESS {
-	// 	return fmt.Errorf("AILDBG: Can't umount image: %s \n", res.Msg)
-	// }
+	res = disk.UmountImage()
+	if res.Status != vzgoploop.VZP_SUCCESS {
+		return fmt.Errorf("VZ Ploop: Can't umount image: %s \n", res.Msg)
+	}
 
 	disk.Close()
 
-	fmt.Printf("AILDBG: [Create Volume] After fiiler\n")
+	//TODO - is it required?
+	//TODO and qemu VM?
 
 	// If we are creating a block volume, resize it to the requested size or the default.
 	// For block volumes, we expect the filler function to have converted the qcow2 image to raw into the rootBlockPath.
@@ -139,7 +135,6 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 	if IsContentBlock(vol.contentType) {
 		// Convert to bytes.
 		sizeBytes, err := units.ParseByteSizeString(vol.ConfigSize())
-		fmt.Printf("AILDBG: [Create Volume] ! is Block size = %d\n", sizeBytes)
 		if err != nil {
 			return err
 		}
@@ -154,14 +149,13 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 		// Move the GPT alt header to end of disk if needed and if filler specified.
 		if vol.IsVMBlock() && filler != nil && filler.Fill != nil {
 			err = d.moveGPTAltHeader(rootBlockPath)
-			fmt.Printf("AILDBG: [Create Volume] moveGPTAltHeader\n")
 			if err != nil {
 				return err
 			}
 		}
 	}
 
-	fmt.Printf("AILDBG: [Create Volume] CREATED ----------------------\n")
+	d.logger.Debug("VZ Ploop: Created Volume successfully\n")
 	revert.Success()
 	return nil
 }
@@ -217,13 +211,13 @@ func (d *ploop) DeleteVolume(vol Volume, op *operations.Operation) error {
 
 // HasVolume indicates whether a specific volume exists on the storage pool.
 func (d *ploop) HasVolume(vol Volume) (bool, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 	return genericVFSHasVolume(vol)
 }
 
 // FillVolumeConfig populate volume with default config.
 func (d *ploop) FillVolumeConfig(vol Volume) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	initialSize := vol.config["size"]
 
@@ -243,7 +237,7 @@ func (d *ploop) FillVolumeConfig(vol Volume) error {
 
 // ValidateVolume validates the supplied volume config. Optionally removes invalid keys from the volume's config.
 func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	err := d.validateVolume(vol, nil, removeUnknownKeys)
 	if err != nil {
@@ -251,7 +245,7 @@ func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
 	}
 
 	if vol.config["size"] != "" && vol.volType == VolumeTypeBucket {
-		return fmt.Errorf("Size cannot be specified for buckets")
+		return fmt.Errorf("VZ Ploop: Size cannot be specified for buckets")
 	}
 
 	return nil
@@ -259,35 +253,35 @@ func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
 
 // CreateVolumeFromBackup restores a backup tarball onto the storage device.
 func (d *ploop) CreateVolumeFromBackup(vol Volume, srcBackup backup.Info, srcData io.ReadSeeker, op *operations.Operation) (VolumePostHook, revert.Hook, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil, nil, nil
 }
 
 // CreateVolumeFromCopy provides same-pool volume copying functionality.
 func (d *ploop) CreateVolumeFromCopy(vol Volume, srcVol Volume, copySnapshots bool, allowInconsistent bool, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // CreateVolumeFromMigration creates a volume being sent via a migration.
 func (d *ploop) CreateVolumeFromMigration(vol Volume, conn io.ReadWriteCloser, volTargetArgs migration.VolumeTargetArgs, preFiller *VolumeFiller, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // RefreshVolume provides same-pool volume and specific snapshots syncing functionality.
 func (d *ploop) RefreshVolume(vol Volume, srcVol Volume, srcSnapshots []Volume, allowInconsistent bool, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // UpdateVolume applies config changes to the volume.
 func (d *ploop) UpdateVolume(vol Volume, changedConfig map[string]string) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	if vol.contentType != ContentTypeFS {
 		return ErrNotSupported
@@ -306,28 +300,28 @@ func (d *ploop) UpdateVolume(vol Volume, changedConfig map[string]string) error 
 
 // GetVolumeUsage returns the disk space used by the volume.
 func (d *ploop) GetVolumeUsage(vol Volume) (int64, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return 0, nil
 }
 
 // SetVolumeQuota applies a size limit on volume.
 func (d *ploop) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // GetVolumeDiskPath returns the location of a disk volume.
 func (d *ploop) GetVolumeDiskPath(vol Volume) (string, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return "", nil
 }
 
 // ListVolumes returns a list of volumes in storage pool.
 func (d *ploop) ListVolumes() ([]Volume, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil, nil
 }
@@ -337,13 +331,14 @@ func (d *ploop) ListVolumes() ([]Volume, error) {
 // MountVolume simulates mounting a volume.
 func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 
-	PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
+	d.PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
 
 	pc, _, _, _ := runtime.Caller(2)
 	funcName := runtime.FuncForPC(pc).Name()
 
+	//TODO:  - remove this after checking
 	if strings.Contains(funcName, "UpdateInstanceBackupFile") {
-		fmt.Printf("AILDBG:3 Update backup - skip for now\n")
+		d.logger.Debug("VZ Ploop: Update backup - skip for now")
 		return nil
 	}
 
@@ -365,20 +360,19 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 
 	disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("AILDBG:3 Can't open disk: %s \n", res.Msg)
+		return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
 	}
 
 	//TODO - think about it, maybe unit test will be enough
 	status, res := disk.IsMounted()
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		fmt.Printf("AILDBG:4 Can't get mount disk status after mount: %s \n", res.Msg)
+		d.logger.Warn("VZ Ploop: Can't get mount disk status after mount", logger.Ctx{"msg": res.Msg})
 		return nil
 	}
 
 	if status {
-		fmt.Printf("AILDBG:5 Disk already mounted \n")
 		count := vol.MountRefCountIncrement()
-		fmt.Printf("AILDBG:6 [%s] --[%s:%s] count = %d\n", runtime.FuncForPC(pc).Name(), vol.name, vol.mountCustomPath, count)
+		d.logger.Debug("VZ Ploop: MountVolume - already mounted", logger.Ctx{"counter": count})
 		return nil
 
 	}
@@ -387,15 +381,15 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 
 	device, res := disk.MountImage(&mp)
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		fmt.Printf("AILDBG:7 Can't mount image Mount: %s \n", res.Msg)
+		d.logger.Warn("VZ Ploop: Can't mount image Mount", logger.Ctx{"msg": res.Msg})
 		return nil //TODO already mounted check
 	}
 
 	count := vol.MountRefCountIncrement() // From here on it is up to caller to call UnmountVolume() when done.
-	fmt.Printf("AILDBG:8 [%s] --[%s:%s] count = %d\n", runtime.FuncForPC(pc).Name(), vol.name, vol.mountCustomPath, count)
+	d.logger.Debug("VZ Ploop: MountVolume", logger.Ctx{"counter": count})
 
 	disk.Close()
-	fmt.Printf("AILDBG:9 mounted [%s]\n", device)
+	d.logger.Info("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
 
 	return nil
 }
@@ -404,13 +398,13 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 // returns false indicating the volume was already unmounted.
 func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operation) (bool, error) {
 
-	PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
+	d.PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
 
 	pc, _, _, _ := runtime.Caller(2)
 	funcName := runtime.FuncForPC(pc).Name()
 
 	if strings.Contains(funcName, "UpdateInstanceBackupFile") {
-		fmt.Printf("AILDBG:3 Update backup - skip for now\n")
+		d.logger.Info("VZ Ploop: Update backup - skip for now")
 		return false, nil
 	}
 
@@ -423,28 +417,24 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 
 	refCount := vol.MountRefCountDecrement()
 	if refCount > 0 {
-		d.logger.Debug("Skipping unmount as in use", logger.Ctx{"volName": vol.name, "refCount": refCount})
-		fmt.Printf("AILDBG:2 [%s] Skip unmount!! -- [%s:%s] count = %d\n", runtime.FuncForPC(pc).Name(), vol.name, vol.mountCustomPath, refCount)
+		d.logger.Info("VZ Ploop: Skipping unmount as in use", logger.Ctx{"volName": vol.name, "refCount": refCount})
 		return false, ErrInUse
 	}
-
-	fmt.Printf("AILDBG:2 [%s] -- [%s:%s] count = %d\n", runtime.FuncForPC(pc).Name(), vol.name, vol.mountCustomPath, refCount)
-
-	//TODO - should I keep disk or I can close and open it
 
 	disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
 
 	res = disk.UmountImage()
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		fmt.Printf("AILDBG:3 Can't umount image: %s \n", res.Msg)
+		d.logger.Warn("VZ Ploop: Can't umount image", logger.Ctx{"msg": res.Msg})
 	}
 
 	status, res := disk.IsMounted()
 	if res.Status != vzgoploop.VZP_SUCCESS {
-		fmt.Printf("AILDBG:4 Can't get mount disk status after umount: %s \n", res.Msg)
+		d.logger.Warn("VZ Ploop: Can't get mount disk status after umount", logger.Ctx{"msg": res.Msg})
 	}
+
 	if status {
-		fmt.Printf("AILDBG:5 Disk is unexpected mounted\n")
+		d.logger.Warn("VZ Ploop: Disk is unexpected mounted", logger.Ctx{"volume": vol.name})
 	}
 
 	disk.Close()
@@ -454,14 +444,14 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 
 // RenameVolume renames a volume and its snapshots.
 func (d *ploop) RenameVolume(vol Volume, newVolName string, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // MigrateVolume sends a volume for migration.
 func (d *ploop) MigrateVolume(vol Volume, conn io.ReadWriteCloser, volSrcArgs *migration.VolumeSourceArgs, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
@@ -469,14 +459,14 @@ func (d *ploop) MigrateVolume(vol Volume, conn io.ReadWriteCloser, volSrcArgs *m
 // BackupVolume copies a volume (and optionally its snapshots) to a specified target path.
 // This driver does not support optimized backups.
 func (d *ploop) BackupVolume(vol Volume, tarWriter *instancewriter.InstanceTarWriter, optimized bool, snapshots []string, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // CreateVolumeSnapshot creates a snapshot of a volume.
 func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
@@ -484,42 +474,42 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 // DeleteVolumeSnapshot removes a snapshot from the storage device. The volName and snapshotName
 // must be bare names and should not be in the format "volume/snapshot".
 func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // MountVolumeSnapshot sets up a read-only mount on top of the snapshot to avoid accidental modifications.
 func (d *ploop) MountVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // UnmountVolumeSnapshot removes the read-only mount placed on top of a snapshot.
 func (d *ploop) UnmountVolumeSnapshot(snapVol Volume, op *operations.Operation) (bool, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return true, nil
 }
 
 // VolumeSnapshots returns a list of snapshots for the volume (in no particular order).
 func (d *ploop) VolumeSnapshots(vol Volume, op *operations.Operation) ([]string, error) {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil, nil
 }
 
 // RestoreVolume restores a volume from a snapshot.
 func (d *ploop) RestoreVolume(vol Volume, snapshotName string, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
 
 // RenameVolumeSnapshot renames a volume snapshot.
 func (d *ploop) RenameVolumeSnapshot(snapVol Volume, newSnapshotName string, op *operations.Operation) error {
-	PrintTrace("", 1)
+	d.PrintTrace("", 1)
 
 	return nil
 }
