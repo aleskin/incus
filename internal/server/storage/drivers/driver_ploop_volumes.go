@@ -33,12 +33,13 @@ func (d *ploop) PrintTrace(info string, depth int) {
 	}
 
 	if info != "" && depth > 1 {
-		d.logger.Debug("VZ Ploop: Trace:", logger.Ctx{"info": info, "depth": depth})
+		d.logger.Debug("VZ Ploop: Trace", logger.Ctx{"info": info, "depth": depth})
 	}
 
 	for i := 0; i < depth; i++ {
 		pc, _, _, _ := runtime.Caller(depth - i)
-		d.logger.Debug("VZ Ploop: Trace:", logger.Ctx{"frame": depth - i, "func": runtime.FuncForPC(pc).Name()})
+		d.logger.Debug("VZ Ploop: Trace", logger.Ctx{"frame": depth - i, "func": strings.Replace(runtime.FuncForPC(pc).Name(),
+			"github.com/lxc/incus/v6/internal/server/storage", "", 1)})
 	}
 }
 
