@@ -20,16 +20,15 @@ import (
 	"github.com/lxc/incus/v6/shared/util"
 )
 
-// TODO take values from vzgoploop
 const defaultPloopSize = 4 * 512 * 1024
 const defaultFileName = "root.hds"
 const defaultDescriptor = "DiskDescriptor.xml"
-const MaxTraceDepth = 5
+const maxTraceDepth = 5
 
 func (d *ploop) PrintTrace(info string, depth int) {
 
-	if depth > MaxTraceDepth {
-		depth = MaxTraceDepth
+	if depth > maxTraceDepth {
+		depth = maxTraceDepth
 	}
 
 	if info != "" && depth > 1 {
