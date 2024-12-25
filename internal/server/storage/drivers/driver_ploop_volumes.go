@@ -51,6 +51,10 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 	volPath := vol.MountPath()
 	d.logger.Debug("VZ Ploop: Create Volume", logger.Ctx{"MountPath": volPath, "Name": vol.name, "Type": vol.volType})
 
+	if vol.volType == VolumeTypeBucket {
+		return fmt.Errorf("VZ Ploop: Unsupported Volume Type %s", vol.volType)
+	}
+
 	revert := revert.New()
 	defer revert.Fail()
 
@@ -75,59 +79,53 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 		}
 	}
 
-	// else if vol.volType != VolumeTypeBucket {
-	// 	// Filesystem quotas only used with non-block volume types.
-	// 	revertFunc, err := d.setupInitialQuota(vol)
-	// 	if err != nil {
-	// 		return err
-	// 	}
+	if vol.volType == VolumeTypeContainer {
+		//create ploop device
+		param := vzgoploop.VZP_CreateParam{
+			Size:  defaultPloopSize,
+			Image: volPath + "/" + defaultFileName,
+		}
 
-	// 	if revertFunc != nil {
-	// 		revert.Add(revertFunc)
-	// 	}
-	// }
+		res := vzgoploop.Create(&param)
 
-	//create ploop device
-	param := vzgoploop.VZP_CreateParam{
-		Size:  defaultPloopSize,
-		Image: volPath + "/" + defaultFileName,
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't create disk: %s \n", res.Msg)
+		}
+
+		disk, res := vzgoploop.Open(volPath + "/" + defaultDescriptor)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
+		}
+
+		mp := vzgoploop.VZP_MountParam{Target: volPath + "/rootfs"}
+
+		_ = os.Mkdir(mp.Target, 0755) //TODO
+		device, res := disk.MountImage(&mp)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't mount image create: %s \n", res.Msg)
+		}
+
+		d.logger.Info("VZ Ploop: Mounted", logger.Ctx{"device": device})
+
+		// Run the volume filler function if supplied.
+		err = d.runFiller(vol, rootBlockPath, filler, false)
+		if err != nil {
+			return err
+		}
+
+		res = disk.UmountImage()
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't umount image: %s \n", res.Msg)
+		}
+
+		disk.Close()
+	} else {
+		// Run the volume filler function if supplied.
+		err = d.runFiller(vol, rootBlockPath, filler, false)
+		if err != nil {
+			return err
+		}
 	}
-
-	res := vzgoploop.Create(&param)
-
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("VZ Ploop: Can't create disk: %s \n", res.Msg)
-	}
-
-	disk, res := vzgoploop.Open(volPath + "/" + defaultDescriptor)
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
-	}
-
-	mp := vzgoploop.VZP_MountParam{Target: volPath + "/rootfs"}
-
-	_ = os.Mkdir(mp.Target, 0755) //TODO
-	device, res := disk.MountImage(&mp)
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("VZ Ploop: Can't mount image create: %s \n", res.Msg)
-	}
-
-	d.logger.Info("VZ Ploop: Mounted", logger.Ctx{"device": device})
-
-	// Run the volume filler function if supplied.
-	err = d.runFiller(vol, rootBlockPath, filler, false)
-	if err != nil {
-		return err
-	}
-
-	res = disk.UmountImage()
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("VZ Ploop: Can't umount image: %s \n", res.Msg)
-	}
-
-	disk.Close()
-
-	//TODO and qemu VM?
 
 	// If we are creating a block volume, resize it to the requested size or the default.
 	// For block volumes, we expect the filler function to have converted the qcow2 image to raw into the rootBlockPath.
@@ -163,6 +161,11 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 // DeleteVolume deletes a volume of the storage device. If any snapshots of the volume remain then
 // this function will return an error.
 func (d *ploop) DeleteVolume(vol Volume, op *operations.Operation) error {
+
+	if vol.volType == VolumeTypeBucket {
+		return fmt.Errorf("VZ Ploop: Unsupported Volume Type %s", vol.volType)
+	}
+
 	snapshots, err := d.VolumeSnapshots(vol, op)
 	if err != nil {
 		return err
@@ -178,20 +181,6 @@ func (d *ploop) DeleteVolume(vol Volume, op *operations.Operation) error {
 	if !util.PathExists(volPath) {
 		return nil
 	}
-
-	// Get the volume ID for the volume, which is used to remove project quota.
-	// if vol.Type() != VolumeTypeBucket {
-	// 	volID, err := d.getVolID(vol.volType, vol.name)
-	// 	if err != nil {
-	// 		return err
-	// 	}
-
-	// 	// Remove the project quota.
-	// 	// err = d.deleteQuota(volPath, volID)
-	// 	// if err != nil {
-	// 	// 	return err
-	// 	// }
-	// }
 
 	// Remove the volume from the storage device.
 	err = forceRemoveAll(volPath)
@@ -326,8 +315,6 @@ func (d *ploop) ListVolumes() ([]Volume, error) {
 	return nil, nil
 }
 
-//TODO - think about counter, fail mount - revert back counter
-
 // MountVolume simulates mounting a volume.
 func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 
@@ -349,38 +336,39 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 		}
 	}
 
-	disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
-	}
+	if vol.volType == VolumeTypeContainer {
+		disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
+		}
 
-	//TODO - think about it, maybe unit test will be enough
-	status, res := disk.IsMounted()
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		d.logger.Warn("VZ Ploop: Can't get mount disk status after mount", logger.Ctx{"msg": res.Msg})
-		return nil
-	}
+		status, res := disk.IsMounted()
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Warn("VZ Ploop: Can't get mount disk status after mount", logger.Ctx{"msg": res.Msg})
+			return nil
+		}
 
-	if status {
-		count := vol.MountRefCountIncrement()
-		d.logger.Debug("VZ Ploop: MountVolume - already mounted", logger.Ctx{"counter": count})
-		return nil
+		if status {
+			count := vol.MountRefCountIncrement()
+			d.logger.Debug("VZ Ploop: MountVolume - already mounted", logger.Ctx{"counter": count})
+			return nil
 
-	}
+		}
 
-	mp := vzgoploop.VZP_MountParam{Target: vol.MountPath() + "/rootfs"}
+		mp := vzgoploop.VZP_MountParam{Target: vol.MountPath() + "/rootfs"}
 
-	device, res := disk.MountImage(&mp)
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		d.logger.Warn("VZ Ploop: Can't mount image Mount", logger.Ctx{"msg": res.Msg})
-		return nil //TODO already mounted check
+		device, res := disk.MountImage(&mp)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Warn("VZ Ploop: Can't mount image Mount", logger.Ctx{"msg": res.Msg})
+			return nil //TODO already mounted check
+		}
+
+		disk.Close()
+		d.logger.Info("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
 	}
 
 	count := vol.MountRefCountIncrement() // From here on it is up to caller to call UnmountVolume() when done.
 	d.logger.Debug("VZ Ploop: MountVolume", logger.Ctx{"counter": count})
-
-	disk.Close()
-	d.logger.Info("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
 
 	return nil
 }
@@ -404,23 +392,25 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 		return false, ErrInUse
 	}
 
-	disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
+	if vol.volType == VolumeTypeContainer {
+		disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
 
-	res = disk.UmountImage()
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		d.logger.Warn("VZ Ploop: Can't umount image", logger.Ctx{"msg": res.Msg})
+		res = disk.UmountImage()
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Warn("VZ Ploop: Can't umount image", logger.Ctx{"msg": res.Msg})
+		}
+
+		status, res := disk.IsMounted()
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Warn("VZ Ploop: Can't get mount disk status after umount", logger.Ctx{"msg": res.Msg})
+		}
+
+		if status {
+			d.logger.Warn("VZ Ploop: Disk is unexpected mounted", logger.Ctx{"volume": vol.name})
+		}
+
+		disk.Close()
 	}
-
-	status, res := disk.IsMounted()
-	if res.Status != vzgoploop.VZP_SUCCESS {
-		d.logger.Warn("VZ Ploop: Can't get mount disk status after umount", logger.Ctx{"msg": res.Msg})
-	}
-
-	if status {
-		d.logger.Warn("VZ Ploop: Disk is unexpected mounted", logger.Ctx{"volume": vol.name})
-	}
-
-	disk.Close()
 
 	return false, nil
 }
