@@ -127,7 +127,6 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 
 	disk.Close()
 
-	//TODO - is it required?
 	//TODO and qemu VM?
 
 	// If we are creating a block volume, resize it to the requested size or the default.
@@ -334,15 +333,6 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 
 	d.PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
 
-	pc, _, _, _ := runtime.Caller(2)
-	funcName := runtime.FuncForPC(pc).Name()
-
-	//TODO:  - remove this after checking
-	if strings.Contains(funcName, "UpdateInstanceBackupFile") {
-		d.logger.Debug("VZ Ploop: Update backup - skip for now")
-		return nil
-	}
-
 	unlock, err := vol.MountLock()
 	if err != nil {
 		return err
@@ -400,14 +390,6 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Operation) (bool, error) {
 
 	d.PrintTrace(": "+vol.name+"; ["+vol.MountPath()+"]", 3)
-
-	pc, _, _, _ := runtime.Caller(2)
-	funcName := runtime.FuncForPC(pc).Name()
-
-	if strings.Contains(funcName, "UpdateInstanceBackupFile") {
-		d.logger.Info("VZ Ploop: Update backup - skip for now")
-		return false, nil
-	}
 
 	unlock, err := vol.MountLock()
 	if err != nil {
