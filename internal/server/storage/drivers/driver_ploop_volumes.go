@@ -46,9 +46,11 @@ func (d *ploop) PrintTrace(info string, depth int) {
 // filler function.
 func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Operation) error {
 
-	d.PrintTrace("", 1)
+	d.PrintTrace("Create", 3)
 	volPath := vol.MountPath()
 	d.logger.Debug("VZ Ploop: Create Volume", logger.Ctx{"MountPath": volPath, "Name": vol.name, "Type": vol.volType})
+
+	d.logger.Debug("VZ Ploop: Create Volume 2", logger.Ctx{"ContenType": vol.contentType})
 
 	if vol.volType == VolumeTypeBucket {
 		return fmt.Errorf("VZ Ploop: Unsupported Volume Type %s", vol.volType)
@@ -104,7 +106,7 @@ func (d *ploop) CreateVolume(vol Volume, filler *VolumeFiller, op *operations.Op
 			return fmt.Errorf("VZ Ploop: Can't mount image create: %s \n", res.Msg)
 		}
 
-		d.logger.Info("VZ Ploop: Mounted", logger.Ctx{"device": device})
+		d.logger.Debug("VZ Ploop: Mounted", logger.Ctx{"device": device})
 
 		// Run the volume filler function if supplied.
 		err = d.runFiller(vol, rootBlockPath, filler, false)
@@ -199,7 +201,7 @@ func (d *ploop) DeleteVolume(vol Volume, op *operations.Operation) error {
 
 // HasVolume indicates whether a specific volume exists on the storage pool.
 func (d *ploop) HasVolume(vol Volume) (bool, error) {
-	d.PrintTrace("", 1)
+	d.PrintTrace("HasVolume", 3)
 	return genericVFSHasVolume(vol)
 }
 
@@ -309,7 +311,8 @@ func (d *ploop) GetVolumeDiskPath(vol Volume) (string, error) {
 
 // ListVolumes returns a list of volumes in storage pool.
 func (d *ploop) ListVolumes() ([]Volume, error) {
-	d.PrintTrace("", 1)
+	d.PrintTrace("VZ Ploop: ListVolumes", 2)
+	d.logger.Debug("VZ Ploop: List Volume")
 
 	return nil, nil
 }
@@ -363,7 +366,7 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 		}
 
 		disk.Close()
-		d.logger.Info("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
+		d.logger.Debug("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
 	}
 
 	count := vol.MountRefCountIncrement() // From here on it is up to caller to call UnmountVolume() when done.
