@@ -2389,7 +2389,6 @@ func (b *backend) UpdateInstance(inst instance.Instance, newDesc string, newConf
 
 	// Apply config changes if there are any.
 	changedConfig, userOnly := b.detectChangedConfig(curVol.Config, newConfig)
-	b.driver.Logger().Debug("VZ Ploop: backend", logger.Ctx{"Name()": b.driver.Name(), "Info().name": b.driver.Info().Name})
 	if len(changedConfig) != 0 {
 		// Check that the volume's size property isn't being changed.
 		if changedConfig["size"] != "" && b.driver.Info().Name != "ploop" {
