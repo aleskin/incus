@@ -20,7 +20,7 @@ import (
 	"github.com/lxc/incus/v6/shared/util"
 )
 
-const defaultPloopSize = 4 * 512 * 1024
+const defaultPloopSize = 10 * 1024 * 1024 //10Gb
 const defaultFileName = "root.hds"
 const defaultDescriptor = "DiskDescriptor.xml"
 const maxTraceDepth = 5
@@ -227,15 +227,20 @@ func (d *ploop) FillVolumeConfig(vol Volume) error {
 
 // ValidateVolume validates the supplied volume config. Optionally removes invalid keys from the volume's config.
 func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
-	d.PrintTrace("", 1)
 
-	err := d.validateVolume(vol, nil, removeUnknownKeys)
-	if err != nil {
-		return err
-	}
+	d.PrintTrace(vol.name, 1)
 
-	if vol.config["size"] != "" && vol.volType == VolumeTypeBucket {
-		return fmt.Errorf("VZ Ploop: Size cannot be specified for buckets")
+	if vol.volType != VolumeTypeContainer {
+		err := d.validateVolume(vol, nil, removeUnknownKeys)
+		if err != nil {
+			d.logger.Debug("VZ Ploop: 1 Size cannot be specified")
+			return err
+		}
+
+		if vol.config["size"] != "" && vol.volType == VolumeTypeBucket {
+			d.logger.Debug("VZ Ploop: 2 Size cannot be specified")
+			return fmt.Errorf("VZ Ploop: Size cannot be specified for buckets")
+		}
 	}
 
 	return nil
@@ -271,7 +276,46 @@ func (d *ploop) RefreshVolume(vol Volume, srcVol Volume, srcSnapshots []Volume, 
 
 // UpdateVolume applies config changes to the volume.
 func (d *ploop) UpdateVolume(vol Volume, changedConfig map[string]string) error {
-	d.PrintTrace("", 1)
+	d.PrintTrace("UpdateVolume", 2)
+
+	i := 1
+	for key, val := range changedConfig {
+		d.logger.Debug("VZ Ploop: Change config for", logger.Ctx{"item": i, "key": key, "value": val})
+		i++
+	}
+
+	if vol.volType == VolumeTypeContainer {
+		val, ok := changedConfig["size"]
+		if ok {
+
+			disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
+			if res.Status != vzgoploop.VZP_SUCCESS {
+				return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
+			}
+
+			defer disk.Close()
+
+			newSize, err := units.ParseByteSizeString(val)
+			if err != nil {
+				return err
+			}
+
+			err = d.SetVolumeQuota(vol, val, false, nil)
+			if err != nil {
+				return err
+			}
+
+			ploopSize := uint64(newSize / 1024)
+			d.logger.Debug("VZ Ploop: Update volume ", logger.Ctx{"newSize": ploopSize})
+			res = disk.Resize(ploopSize, false)
+			if res.Status != vzgoploop.VZP_SUCCESS {
+				return fmt.Errorf("VZ Ploop: Can't change disk size: %s \n", res.Msg)
+			}
+			d.logger.Debug("VZ Ploop: Disk updated ")
+		}
+
+		return nil
+	}
 
 	if vol.contentType != ContentTypeFS {
 		return ErrNotSupported
@@ -344,6 +388,8 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 			return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
 		}
 
+		defer disk.Close()
+
 		status, res := disk.IsMounted()
 		if res.Status != vzgoploop.VZP_SUCCESS {
 			d.logger.Warn("VZ Ploop: Can't get mount disk status after mount", logger.Ctx{"msg": res.Msg})
@@ -365,7 +411,6 @@ func (d *ploop) MountVolume(vol Volume, op *operations.Operation) error {
 			return nil //TODO already mounted check
 		}
 
-		disk.Close()
 		d.logger.Debug("VZ Ploop: MountVolume - Done", logger.Ctx{"device": device})
 	}
 
@@ -397,9 +442,15 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 	if vol.volType == VolumeTypeContainer {
 		disk, res := vzgoploop.Open(vol.MountPath() + "/" + defaultDescriptor)
 
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Error("VZ Ploop: Can't open disk", logger.Ctx{"msg": res.Msg})
+		}
+
+		defer disk.Close()
+
 		res = disk.UmountImage()
 		if res.Status != vzgoploop.VZP_SUCCESS {
-			d.logger.Warn("VZ Ploop: Can't umount image", logger.Ctx{"msg": res.Msg})
+			d.logger.Error("VZ Ploop: Can't umount image", logger.Ctx{"msg": res.Msg})
 		}
 
 		status, res := disk.IsMounted()
@@ -408,10 +459,8 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 		}
 
 		if status {
-			d.logger.Warn("VZ Ploop: Disk is unexpected mounted", logger.Ctx{"volume": vol.name})
+			d.logger.Error("VZ Ploop: Disk is unexpected mounted", logger.Ctx{"volume": vol.name})
 		}
-
-		disk.Close()
 	}
 
 	return false, nil
