@@ -233,12 +233,11 @@ func (d *ploop) ValidateVolume(vol Volume, removeUnknownKeys bool) error {
 	if vol.volType != VolumeTypeContainer {
 		err := d.validateVolume(vol, nil, removeUnknownKeys)
 		if err != nil {
-			d.logger.Debug("VZ Ploop: 1 Size cannot be specified")
+			d.logger.Debug("VZ Ploop: Size cannot be specified for non-containers type")
 			return err
 		}
 
 		if vol.config["size"] != "" && vol.volType == VolumeTypeBucket {
-			d.logger.Debug("VZ Ploop: 2 Size cannot be specified")
 			return fmt.Errorf("VZ Ploop: Size cannot be specified for buckets")
 		}
 	}
