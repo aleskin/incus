@@ -11,9 +11,11 @@ import (
 
 	"bitbucket.org/aleskinprivate/vzgoploop"
 	"github.com/lxc/incus/v6/internal/instancewriter"
+	"github.com/lxc/incus/v6/internal/rsync"
 	"github.com/lxc/incus/v6/internal/server/backup"
 	"github.com/lxc/incus/v6/internal/server/migration"
 	"github.com/lxc/incus/v6/internal/server/operations"
+	"github.com/lxc/incus/v6/shared/api"
 	"github.com/lxc/incus/v6/shared/logger"
 	"github.com/lxc/incus/v6/shared/revert"
 	"github.com/lxc/incus/v6/shared/units"
@@ -501,8 +503,64 @@ func (d *ploop) BackupVolume(vol Volume, tarWriter *instancewriter.InstanceTarWr
 
 // CreateVolumeSnapshot creates a snapshot of a volume.
 func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
-	d.PrintTrace("", 1)
+	d.PrintTrace("Create for:"+snapVol.MountPath(), 3)
 
+	parentName, snapName, _ := api.GetParentAndSnapshotName(snapVol.name)
+	//srcDevPath, err := d.GetVolumeDiskPath(parentVol)
+	srcPath := GetVolumeMountPath(d.name, snapVol.volType, parentName)
+
+	d.logger.Debug("VZ Ploop: Create snap", logger.Ctx{"type1": snapVol.volType, "parent": parentName, "snapName": snapName})
+	d.logger.Debug("VZ Ploop: Create snap", logger.Ctx{"srcPath": srcPath})
+
+	// Create snapshot directory.
+	err := snapVol.EnsureMountPath()
+	if err != nil {
+		return err
+	}
+
+	revert := revert.New()
+	defer revert.Fail()
+
+	snapPath := snapVol.MountPath()
+	revert.Add(func() { _ = os.RemoveAll(snapPath) })
+
+	if snapVol.volType == VolumeTypeContainer {
+
+		var rsyncArgs []string
+
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultFileName)
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultDescriptor)
+		rsyncArgs = append(rsyncArgs, "--exclude", ".statfs")
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultFileName+"*")
+		rsyncArgs = append(rsyncArgs, "--exclude", "rootfs")
+
+		bwlimit := d.config["rsync.bwlimit"]
+		srcPath := GetVolumeMountPath(d.name, snapVol.volType, parentName)
+		d.Logger().Debug("Copying fileystem volume", logger.Ctx{"sourcePath": srcPath, "targetPath": snapPath, "bwlimit": bwlimit, "rsyncArgs": rsyncArgs})
+
+		// Copy filesystem volume into snapshot directory.
+		_, err = rsync.LocalCopy(srcPath, snapPath, bwlimit, true, rsyncArgs...)
+		if err != nil {
+			return err
+		}
+
+		disk, res := vzgoploop.Open(srcPath + "/" + defaultDescriptor)
+
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't open disk: %s \n", res.Msg)
+		}
+		defer disk.Close()
+
+		//create snapshot
+		uuid, res := disk.CreateSnapshot(snapVol.MountPath())
+
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't create snapshot: %s \n", res.Msg)
+		}
+		d.logger.Debug("VZ Ploop: Created snapshot", logger.Ctx{"uuid": uuid})
+	}
+
+	revert.Success()
 	return nil
 }
 
@@ -530,7 +588,7 @@ func (d *ploop) UnmountVolumeSnapshot(snapVol Volume, op *operations.Operation) 
 
 // VolumeSnapshots returns a list of snapshots for the volume (in no particular order).
 func (d *ploop) VolumeSnapshots(vol Volume, op *operations.Operation) ([]string, error) {
-	d.PrintTrace("", 1)
+	d.PrintTrace("List of Snapshots for:"+vol.MountPath()+"/"+defaultDescriptor, 3)
 
 	return nil, nil
 }
