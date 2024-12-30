@@ -333,8 +333,20 @@ func (d *ploop) UpdateVolume(vol Volume, changedConfig map[string]string) error 
 
 // GetVolumeUsage returns the disk space used by the volume.
 func (d *ploop) GetVolumeUsage(vol Volume) (int64, error) {
-	d.PrintTrace("", 1)
+	d.PrintTrace("Usage for:"+vol.MountPath()+"/"+defaultDescriptor, 3)
 
+	// Snapshot usage not supported for Ploop.
+	if vol.IsSnapshot() {
+		return -1, ErrNotSupported
+	}
+
+	if vol.volType == VolumeTypeContainer {
+		stats, res := vzgoploop.GetDiskStats(vol.MountPath() + "/" + defaultDescriptor)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return -1, fmt.Errorf("VZ Ploop: Can't get disk stats: %s \n", res.Msg)
+		}
+		return int64(stats.TotalSize), nil
+	}
 	return 0, nil
 }
 
