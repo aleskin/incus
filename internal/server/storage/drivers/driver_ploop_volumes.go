@@ -552,7 +552,9 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 		defer disk.Close()
 
 		//create snapshot
-		uuid, res := disk.CreateSnapshot(snapVol.MountPath())
+		uuid, res := disk.CreateSnapshot("")
+		//TODO: - it seems parameter inside CreateSnapshot() does not work or ignores, or has another meaning
+		//need additional investigation. I assumed to use here snapVol.MountPath()
 
 		if res.Status != vzgoploop.VZP_SUCCESS {
 			return fmt.Errorf("VZ Ploop: Can't create snapshot: %s \n", res.Msg)
