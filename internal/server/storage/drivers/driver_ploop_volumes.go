@@ -570,6 +570,25 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 // must be bare names and should not be in the format "volume/snapshot".
 func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
 	d.PrintTrace("", 1)
+	snapPath := snapVol.MountPath()
+
+	// Remove the snapshot from the storage device.
+	err := forceRemoveAll(snapPath)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("Failed to remove '%s': %w", snapPath, err)
+	}
+
+	parentName, _, _ := api.GetParentAndSnapshotName(snapVol.name)
+
+	// Remove the parent snapshot directory if this is the last snapshot being removed.
+	err = deleteParentSnapshotDirIfEmpty(d.name, snapVol.volType, parentName)
+	if err != nil {
+		return err
+	}
+
+	//TODO - need merge snapshot if it is in the midle
+	//TODO - design keeping info about guid of snapshot and snapshot number
+	//TODO - I suppose we need keep list of snapshots
 
 	return nil
 }
