@@ -25,6 +25,7 @@ import (
 const defaultPloopSize = 10 * 1024 * 1024 //10Gb
 const defaultFileName = "root.hds"
 const defaultDescriptor = "DiskDescriptor.xml"
+const snapshotInfo = "snapshot.info"
 const maxTraceDepth = 5
 
 func (d *ploop) PrintTrace(info string, depth int) {
@@ -560,6 +561,20 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 			return fmt.Errorf("VZ Ploop: Can't create snapshot: %s \n", res.Msg)
 		}
 		d.logger.Debug("VZ Ploop: Created snapshot", logger.Ctx{"uuid": uuid})
+
+		//todo - think about revert
+		fSnapshotInfo, err := os.Create(snapPath + "/" + snapshotInfo)
+		if err != nil {
+			return err
+		}
+
+		defer fSnapshotInfo.Close()
+
+		_, err = fSnapshotInfo.WriteString("uuid = " + uuid + "\npath = " + srcPath)
+		if err != nil {
+			return err
+		}
+		fSnapshotInfo.Sync()
 	}
 
 	revert.Success()
@@ -571,6 +586,45 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
 	d.PrintTrace("", 1)
 	snapPath := snapVol.MountPath()
+
+	if snapVol.volType == VolumeTypeContainer {
+		b, err := os.ReadFile(snapPath + "/" + snapshotInfo)
+		if err != nil {
+			fmt.Print(err)
+		}
+
+		info := strings.Split(string(b), "\n")
+
+		var uuid, srcPath string
+		for _, line := range info {
+			key, val, _ := strings.Cut(line, " = ")
+			if key == "uuid" {
+				uuid = val
+			} else if key == "path" {
+				srcPath = val
+			}
+		}
+
+		d.logger.Debug("AILDBG: VZ Ploop: Remove Snapshot", logger.Ctx{"uuid": uuid, "srcPath": srcPath})
+
+		if srcPath == "" || uuid == "" {
+			return fmt.Errorf("Failed to remove. Wrong parameters in the config file: '%s' [ uuid =%s; path = %s",
+				snapPath+"/"+snapshotInfo, uuid, srcPath)
+		}
+
+		disk, res := vzgoploop.Open(srcPath + "/" + defaultDescriptor)
+
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Error("VZ Ploop: Can't open disk", logger.Ctx{"msg": res.Msg})
+		}
+
+		defer disk.Close()
+
+		res = disk.DeleteSnapshot(uuid)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't delete snapshot: %s", res.Msg)
+		}
+	}
 
 	// Remove the snapshot from the storage device.
 	err := forceRemoveAll(snapPath)
@@ -585,11 +639,6 @@ func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 	if err != nil {
 		return err
 	}
-
-	//TODO - need merge snapshot if it is in the midle
-	//TODO - design keeping info about guid of snapshot and snapshot number
-	//TODO - I suppose we need keep list of snapshots
-
 	return nil
 }
 
