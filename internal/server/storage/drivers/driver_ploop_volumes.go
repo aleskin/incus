@@ -736,5 +736,5 @@ func (d *ploop) RestoreVolume(vol Volume, snapshotName string, op *operations.Op
 func (d *ploop) RenameVolumeSnapshot(snapVol Volume, newSnapshotName string, op *operations.Operation) error {
 	d.PrintTrace("", 1)
 
-	return nil
+	return genericVFSRenameVolumeSnapshot(d, snapVol, newSnapshotName, op)
 }
