@@ -537,7 +537,7 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 
 		bwlimit := d.config["rsync.bwlimit"]
 		srcPath := GetVolumeMountPath(d.name, snapVol.volType, parentName)
-		d.Logger().Debug("Copying fileystem volume", logger.Ctx{"sourcePath": srcPath, "targetPath": snapPath, "bwlimit": bwlimit, "rsyncArgs": rsyncArgs})
+		d.Logger().Debug("VZ Ploop: Copying fileystem volume", logger.Ctx{"sourcePath": srcPath, "targetPath": snapPath, "bwlimit": bwlimit, "rsyncArgs": rsyncArgs})
 
 		// Copy filesystem volume into snapshot directory.
 		_, err = rsync.LocalCopy(srcPath, snapPath, bwlimit, true, rsyncArgs...)
@@ -605,10 +605,10 @@ func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 			}
 		}
 
-		d.logger.Debug("AILDBG: VZ Ploop: Remove Snapshot", logger.Ctx{"uuid": uuid, "srcPath": srcPath})
+		d.logger.Debug("VZ Ploop: Remove Snapshot", logger.Ctx{"uuid": uuid, "srcPath": srcPath})
 
 		if srcPath == "" || uuid == "" {
-			return fmt.Errorf("Failed to remove. Wrong parameters in the config file: '%s' [ uuid =%s; path = %s",
+			return fmt.Errorf("Failed to remove. Wrong parameters in the config file: '%s' [ uuid =%s; path = %s]",
 				snapPath+"/"+snapshotInfo, uuid, srcPath)
 		}
 
@@ -616,13 +616,12 @@ func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 
 		if res.Status != vzgoploop.VZP_SUCCESS {
 			d.logger.Error("VZ Ploop: Can't open disk", logger.Ctx{"msg": res.Msg})
-		}
-
-		defer disk.Close()
-
-		res = disk.DeleteSnapshot(uuid)
-		if res.Status != vzgoploop.VZP_SUCCESS {
-			return fmt.Errorf("VZ Ploop: Can't delete snapshot: %s", res.Msg)
+		} else {
+			res = disk.DeleteSnapshot(uuid)
+			if res.Status != vzgoploop.VZP_SUCCESS {
+				return fmt.Errorf("VZ Ploop: Can't delete snapshot: %s", res.Msg)
+			}
+			disk.Close()
 		}
 	}
 
@@ -666,6 +665,69 @@ func (d *ploop) VolumeSnapshots(vol Volume, op *operations.Operation) ([]string,
 // RestoreVolume restores a volume from a snapshot.
 func (d *ploop) RestoreVolume(vol Volume, snapshotName string, op *operations.Operation) error {
 	d.PrintTrace("", 1)
+
+	snapPath := vol.MountPath()
+
+	snapVol, err := vol.NewSnapshot(snapshotName)
+	if err != nil {
+		return err
+	}
+	srcPath := snapVol.MountPath()
+
+	if vol.volType == VolumeTypeContainer {
+		b, err := os.ReadFile(srcPath + "/" + snapshotInfo)
+		if err != nil {
+			fmt.Print(err)
+		}
+
+		info := strings.Split(string(b), "\n")
+
+		var uuid string
+		for _, line := range info {
+			key, val, _ := strings.Cut(line, " = ")
+			if key == "uuid" {
+				uuid = val
+				break
+			}
+		}
+
+		d.logger.Debug("VZ Ploop: Switch Snapshot", logger.Ctx{"uuid": uuid, "path": snapPath})
+
+		if uuid == "" {
+			return fmt.Errorf("Failed to switch on snapshot. Wrong parameters in the config file: '%s' [ uuid =%s]",
+				snapPath+"/"+snapshotInfo, uuid)
+		}
+
+		disk, res := vzgoploop.Open(snapPath + "/" + defaultDescriptor)
+		defer disk.Close()
+
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			d.logger.Error("VZ Ploop: Can't open disk", logger.Ctx{"msg": res.Msg})
+		}
+
+		res = disk.SwitchSnapshot(uuid)
+		if res.Status != vzgoploop.VZP_SUCCESS {
+			return fmt.Errorf("VZ Ploop: Can't switch to snapshot: %s", res.Msg)
+		}
+
+		var rsyncArgs []string
+
+		rsyncArgs = append(rsyncArgs, "--exclude", snapshotInfo)
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultFileName)
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultDescriptor)
+		rsyncArgs = append(rsyncArgs, "--exclude", ".statfs")
+		rsyncArgs = append(rsyncArgs, "--exclude", defaultFileName+"*")
+		rsyncArgs = append(rsyncArgs, "--exclude", "rootfs")
+
+		bwlimit := d.config["rsync.bwlimit"]
+		d.Logger().Debug("VZ Ploop: Copying fileystem volume", logger.Ctx{"sourcePath": srcPath, "targetPath": snapPath, "bwlimit": bwlimit, "rsyncArgs": rsyncArgs})
+
+		// Copy filesystem volume into snapshot directory.
+		_, err = rsync.LocalCopy(srcPath, snapPath, bwlimit, true, rsyncArgs...)
+		if err != nil {
+			return err
+		}
+	}
 
 	return nil
 }
