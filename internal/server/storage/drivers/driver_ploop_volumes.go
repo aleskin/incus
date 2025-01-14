@@ -657,9 +657,8 @@ func (d *ploop) UnmountVolumeSnapshot(snapVol Volume, op *operations.Operation) 
 
 // VolumeSnapshots returns a list of snapshots for the volume (in no particular order).
 func (d *ploop) VolumeSnapshots(vol Volume, op *operations.Operation) ([]string, error) {
-	d.PrintTrace("List of Snapshots for:"+vol.MountPath()+"/"+defaultDescriptor, 3)
-
-	return nil, nil
+	d.PrintTrace("List of Snapshots for: "+vol.MountPath()+"/"+defaultDescriptor, 1)
+	return genericVFSVolumeSnapshots(d, vol, op)
 }
 
 // RestoreVolume restores a volume from a snapshot.
