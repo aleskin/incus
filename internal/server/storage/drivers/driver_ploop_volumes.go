@@ -498,8 +498,7 @@ func (d *ploop) MigrateVolume(vol Volume, conn io.ReadWriteCloser, volSrcArgs *m
 // This driver does not support optimized backups.
 func (d *ploop) BackupVolume(vol Volume, tarWriter *instancewriter.InstanceTarWriter, optimized bool, snapshots []string, op *operations.Operation) error {
 	d.PrintTrace("", 1)
-
-	return nil
+	return genericVFSBackupVolume(d, vol, tarWriter, snapshots, op)
 }
 
 // CreateVolumeSnapshot creates a snapshot of a volume.
