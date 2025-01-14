@@ -363,15 +363,13 @@ func (d *ploop) SetVolumeQuota(vol Volume, size string, allowUnsafeResize bool, 
 // GetVolumeDiskPath returns the location of a disk volume.
 func (d *ploop) GetVolumeDiskPath(vol Volume) (string, error) {
 	d.PrintTrace("", 1)
-
-	return "", nil
+	return genericVFSGetVolumeDiskPath(vol)
 }
 
 // ListVolumes returns a list of volumes in storage pool.
 func (d *ploop) ListVolumes() ([]Volume, error) {
 	d.PrintTrace("VZ Ploop: ListVolumes", 2)
-
-	return nil, nil
+	return genericVFSListVolumes(d)
 }
 
 // MountVolume simulates mounting a volume.
@@ -482,15 +480,13 @@ func (d *ploop) UnmountVolume(vol Volume, keepBlockDev bool, op *operations.Oper
 // RenameVolume renames a volume and its snapshots.
 func (d *ploop) RenameVolume(vol Volume, newVolName string, op *operations.Operation) error {
 	d.PrintTrace("", 1)
-
-	return nil
+	return genericVFSRenameVolume(d, vol, newVolName, op)
 }
 
 // MigrateVolume sends a volume for migration.
 func (d *ploop) MigrateVolume(vol Volume, conn io.ReadWriteCloser, volSrcArgs *migration.VolumeSourceArgs, op *operations.Operation) error {
 	d.PrintTrace("", 1)
-
-	return nil
+	return genericVFSMigrateVolume(d, d.state, vol, conn, volSrcArgs, op)
 }
 
 // BackupVolume copies a volume (and optionally its snapshots) to a specified target path.
