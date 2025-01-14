@@ -370,7 +370,6 @@ func (d *ploop) GetVolumeDiskPath(vol Volume) (string, error) {
 // ListVolumes returns a list of volumes in storage pool.
 func (d *ploop) ListVolumes() ([]Volume, error) {
 	d.PrintTrace("VZ Ploop: ListVolumes", 2)
-	d.logger.Debug("VZ Ploop: List Volume")
 
 	return nil, nil
 }
@@ -509,8 +508,8 @@ func (d *ploop) CreateVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 	//srcDevPath, err := d.GetVolumeDiskPath(parentVol)
 	srcPath := GetVolumeMountPath(d.name, snapVol.volType, parentName)
 
-	d.logger.Debug("VZ Ploop: Create snap", logger.Ctx{"type1": snapVol.volType, "parent": parentName, "snapName": snapName})
-	d.logger.Debug("VZ Ploop: Create snap", logger.Ctx{"srcPath": srcPath})
+	d.logger.Debug("VZ Ploop: Create snapshot",
+		logger.Ctx{"type": snapVol.volType, "parent": parentName, "snapName": snapName, "srcPath": srcPath})
 
 	// Create snapshot directory.
 	err := snapVol.EnsureMountPath()
