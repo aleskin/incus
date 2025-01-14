@@ -645,6 +645,11 @@ func (d *ploop) DeleteVolumeSnapshot(snapVol Volume, op *operations.Operation) e
 func (d *ploop) MountVolumeSnapshot(snapVol Volume, op *operations.Operation) error {
 	d.PrintTrace("", 1)
 
+	//TODO: need investigation for purposes of this methods
+	//I do not see reason to implement this for now.
+	//Ploop driver has the function 'ploop_mount_snapshot' but it does not use
+	//So, for this moment we will keep default mock stub for MountVolumeSnapshot/UnmountVolumeSnapshot
+
 	return nil
 }
 
